@@ -1,4 +1,4 @@
-# requirements mapper
+# DependiPy
 gli script in questa repository servono per mappare le dipendenze di una libreria in modo da poterle selezionare
 in modo modulare quando la libreria mappata viene installata, o in alternativa crea il file requirements.txt con
 le dimendenze esatte installate sul sistema da cui si sta lanciando lo script.
@@ -8,24 +8,16 @@ sono presenti 2 files:
 - librarian.py, che contiene lo script main
 - archive.py, che contiene una classe usata da librarian.py
 
-## installation
-non serve installare lo script per farlo funzionare
-le sole dipendenze necessarie per l'utilizzo sono:
-- numpy
-- pandas
-- argparse
-- tqdm
-
 ## execution
 per usare le funzionalita di mapping venogno richiesti 1 parametro obligatorio e 3 opzionali:
 - obligatori
-  - path, percorso fino alla cartella della libreria o script
+  - **path**, percorso fino alla cartella della libreria o script
 - opzionali:
-  - mode, da scegliere tra 2 modalita, se non viene compilato lo script prova a capire in autonomia quale sia la modalita corretta:
-    - lib, se si vuole mappare le dipendenze di una libreria
-    - script, se si vuole mappare le dipendenze di una script con le librerie custom
-  - config, vuole il percorso ad un file di config con alcune info aggiuntive su enventuali modifiche dal funzionamento standard. Il config deve essere un file json.
-  - docs_only, se attivata questa modalita non genera i file dei requirements o setup.py ma solo i file per la documentazione
+  - **mode**, da scegliere tra 2 modalita, se non viene compilato lo script prova a capire in autonomia quale sia la modalita corretta:
+    - *lib*, se si vuole mappare le dipendenze di una libreria
+    - *script*, se si vuole mappare le dipendenze di una script con le librerie custom
+  - **config**, vuole il percorso ad un file di config con alcune info aggiuntive su enventuali modifiche dal funzionamento standard. Il config deve essere un file json.
+  - **docs_only**, se attivata questa modalita non genera i file dei requirements o setup.py ma solo i file per la documentazione
 
 Se si sta lavorando in lib la cartella indicata nel path è la cartella della libreria, non quella che contiene il setup.py ma quella un livello piu interno a setup.py.
 Se si sta lavorando in script la cartella indicata è quella che contiene lo/gli script.
@@ -33,9 +25,9 @@ Se si sta lavorando in script la cartella indicata è quella che contiene lo/gli
 Librarian è in grado di mappare sia script dentro cartelle con nessun limite sui livelli di profondita.
 Libraria è in grado di mappare le cross dipendenze dentro la libreria indicata.
 
-Il comando per usare libraria è:
+l'esecuzione va invocata come di seguito:
 ```bash
-py .\librarian.py -p <path> -m <mode> -c <config.json>
+DependiPy -p <path> -m <mode> -c <config.json>
 ```
 
 Il file config deve avere la seguente struttura:
