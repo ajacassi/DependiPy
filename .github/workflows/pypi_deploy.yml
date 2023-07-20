@@ -5,7 +5,7 @@ on:
   create
 
 jobs:
-  deploy:
+  pypi_deploy:
     runs-on: ubuntu-latest
     steps:
     - name: pypi-github-sync
