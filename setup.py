@@ -1,4 +1,10 @@
 from setuptools import find_packages, setup
+import os
+
+
+def read_file(filename):
+    with open(os.path.join(os.path.dirname(__file__), filename)) as file:
+        return file.read()
 
 
 version = []
@@ -19,6 +25,8 @@ setup(
     packages=find_packages(include=['DependiPy']),
     license='MIT',
     author='Andrea Jacassi',
+    long_description=read_file('README.md'),
+    long_description_content_type='text/markdown',
     author_email='',
     description='',
     url="https://github.com/ajacassi/DependiPy.git",
