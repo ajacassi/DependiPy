@@ -2,8 +2,7 @@ name: Auto-Upload to PyPI
 
 # This action will be triggered when you create a new GitHub tag
 on:
-  tag:
-    types: [created]
+  create
 
 jobs:
   deploy:
