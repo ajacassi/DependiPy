@@ -1,0 +1,20 @@
+name: Auto-Upload to PyPI
+
+# This action will be triggered when you create a new GitHub tag
+on:
+  release:
+    types: [created]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+    - name: pypi-github-sync
+      uses: PabloLec/pypi-github-sync@v1.0.2
+      with:
+          github_repo: canada/DependiPy
+          twine_username: ${{ secrets.PYPI_NAME }}
+          twine_password: ${{ secrets.PYPI_PASS }}
+          verify_metadata: true
+          skip_existing: true
+          verbose: true
