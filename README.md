@@ -108,10 +108,10 @@ setup(
     version=version,
     packages=find_packages(include=['utilities']),
     license='',
-    author='Enrico Ferro - Andrea Jacassi',
+    author='Andrea Jacassi',
     author_email='',
     description='',
-    url="https://github.com/sherlogic/utilities.git",
+    url="https://github.com/utilities.git",
     extras_require=requires_dict,
     install_requires=[],
 )
