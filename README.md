@@ -100,10 +100,10 @@ setup(
     version=version,
     packages=find_packages(include=['utilities']),
     license='',
-    author='Andrea Jacassi',
+    author='John Do',
     author_email='',
     description='',
-    url="https://github.com/utilities.git",
+    url="https://github.com/rep.git",
     extras_require=requires_dict,
     install_requires=[],
 )
