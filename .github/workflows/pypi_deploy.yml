@@ -1,0 +1,63 @@
+# quessta azione si attiva ad ogni nuovo push su master o main
+# azione che verifica la versione da file e se questa versione e' piu aggiornata rispetto al tag su github, aggiorna il tag
+name: Create Tag on Version Change
+
+on:
+  push:
+    branches:
+      - master
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  create_tag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Read version from file
+        id: get_version
+        # ricordarsi di modificare il percorso del file
+        run: echo "VERSION=$(cat DependiPy/version.py | grep -oP "(?<=version = ')[^']*")" >> $GITHUB_OUTPUT
+
+      - name: Get current tag
+        id: get_current_tag
+        run: echo "TAG=$(git describe --abbrev=0)" >> $GITHUB_OUTPUT
+
+      - name: Check if version has changed
+        id: version_changed
+        run: |
+          PREVIOUS_TAG=${{ steps.get_current_tag.outputs.TAG }}
+          CURRENT_VERSION=${{ steps.get_version.outputs.VERSION }}
+          if [ "$PREVIOUS_TAG" != "$CURRENT_VERSION" ]; then
+            echo "Version has changed. New version is $CURRENT_VERSION"
+            echo "VERSION_CHANGED=true" >> $GITHUB_OUTPUT
+          else
+            echo "Version has not changed."
+            echo "VERSION_CHANGED=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create new tag
+        if: ${{ steps.version_changed.outputs.VERSION_CHANGED == 'true' }}
+        run: |
+          TAG_NAME=${{ steps.get_version.outputs.VERSION }}
+          git tag $TAG_NAME
+          git push origin $TAG_NAME
+
+# This action will be triggered when you create a new GitHub tag
+  pypi_deploy:
+    runs-on: ubuntu-latest
+    needs: create_tag
+    steps:
+    - name: pypi-github-sync
+      uses: PabloLec/pypi-github-sync@v1.0.2
+      with:
+          github_repo: ajacassi/DependiPy
+          twine_username: ${{ secrets.PYPI_NAME }}
+          twine_password: ${{ secrets.PYPI_PASS }}
+          verify_metadata: true
+          skip_existing: true
+          verbose: true
