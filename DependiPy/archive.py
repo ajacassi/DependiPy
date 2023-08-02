@@ -317,7 +317,7 @@ class LibMapperTools:
         ###############################
         if 'docs_only' in kwargs and kwargs.get('docs_only') == False or 'docs_only' not in kwargs:
 
-            if self.mode == 'scirpt':
+            if self.mode == 'script':
                 list_privat_reference = ['[' for _ in range(len(self.librerie_private))]
 
                 for ele in single_requirements:

@@ -12,7 +12,7 @@ def main():
                         required=True)
     parser.add_argument('-m', '--mode', help="lib parser or script parser (lib,script)", required=False)
     parser.add_argument('-c', '--config', help="config file", required=False, default='config.json')
-    parser.add_argument('-do', '--docs_only', help="generate only the documentatino", required=False, default=False)
+    parser.add_argument('-do', '--docs_only', help="generate only the documentation", required=False, default=False)
 
     kwargs = vars(parser.parse_args())
 
