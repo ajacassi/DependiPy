@@ -48,7 +48,7 @@ class LibMapperTools:
                             req_temp.loc[req_temp.index[i], 'file'] = file
                             req_temp.loc[req_temp.index[i], 'req'] = req
                         except:
-                            print(file, 'impossible to read')
+                            print(f'{file} is impossible to read')
                 # viene popolato un dataframe comune a tutti i file
                 df = pd.concat([df, req_temp], ignore_index=True)
                 # se un file non viene considerato perche non ha il .py con il drop viene eliminata la sua riga
@@ -250,7 +250,7 @@ class LibMapperTools:
 
         print(f'list of distribution not found: {distribusion_not_found}')
 
-        if 'docs_only' in kwargs and kwargs.get('docs_only') == False or 'docs_only' not in kwargs:
+        if ('docs_only' in kwargs and kwargs.get('docs_only') == False) or 'docs_only' not in kwargs:
             # viene scritto il file dei requisiti
             with open("requirements.txt", "w") as f:
                 for s in requirements_versioned:
@@ -273,17 +273,18 @@ class LibMapperTools:
 
             # se sono presenti i marker per riscrivere le librerie vengono usati
             api_is_here = True
-            try:
-                if '  - API:' in contents_yml:
-                    yml_start = contents_yml.index('  - API:') + 1
-                    yml_stop = contents_yml[yml_start:].index('') + yml_start
-                else:
-                    yml_start = contents_yml.index('nav:') + 1
-                    yml_start = contents_yml[yml_start:].index('') + yml_start
-                    yml_stop = contents_yml[yml_start:].index('') + yml_start + 1
-                    api_is_here = False
-            except:
-                raise ValueError('missing version tag in the setup.py')
+            if '  - API:' in contents_yml:
+                yml_start = contents_yml.index('  - API:') + 1
+                yml_stop = contents_yml[yml_start:].index('') + yml_start
+            elif 'nav:' in contents_yml:
+                yml_start = contents_yml.index('nav:') + 1
+                yml_start = contents_yml[yml_start:].index('') + yml_start
+                yml_stop = contents_yml[yml_start:].index('') + yml_start + 1
+                api_is_here = False
+            else:
+                yml_start, yml_stop = 0, 0
+                print('missing the proper tag in the mkdocs.yml')
+                exit()
 
             #######################################################################################
             docs = []
@@ -315,7 +316,7 @@ class LibMapperTools:
                     f.write(str(s) + "\n")
 
         ###############################
-        if 'docs_only' in kwargs and kwargs.get('docs_only') == False or 'docs_only' not in kwargs:
+        if ('docs_only' in kwargs and kwargs.get('docs_only') == False) or 'docs_only' not in kwargs:
 
             if self.mode == 'script':
                 list_privat_reference = ['[' for _ in range(len(self.librerie_private))]
@@ -350,13 +351,14 @@ class LibMapperTools:
                     contents[i] = contents[i].split('\n')[0]
 
                 # controllare se ci sono gli star e end
-
                 # se sono presenti i marker per riscrivere le librerie vengono usati
-                try:
+                if '# version go' in contents and '# version end' in contents:
                     vers_start = contents.index('# version go') + 1
                     vers_stop = contents.index('# version end')
-                except:
-                    raise ValueError('missing version tag in the setup.py')
+                else:
+                    vers_start, vers_stop = 0, 0
+                    print('missing version go/end tag')
+                    exit()
 
                 # vengono eliminate le librerie dentro i marker
                 del contents[vers_start: vers_stop]
@@ -364,35 +366,36 @@ class LibMapperTools:
                 # venogono aggiunte le nuove librerie alla lista da scrivere sul file
                 contents[vers_start:vers_start] = requirements_variable
 
-                try:
+                if '# start' in contents and '# stop' in contents:
                     start = contents.index('# start')
                     stop = contents.index('# stop')
-                except:
-                    raise ValueError('missing version tag in the setup.py')
 
-                packets = ['' for _ in range(df.shape[0])]
-                for i in range(df.shape[0]):
-                    packets[i] += f"'{df.loc[df.index[i], 'original']}': ["
+                    packets = ['' for _ in range(df.shape[0])]
+                    for i in range(df.shape[0]):
+                        packets[i] += f"'{df.loc[df.index[i], 'original']}': ["
 
-                    _, _, _, eles = self.clean_from_python_packages(df.loc[df.index[i], "req"])
+                        _, _, _, eles = self.clean_from_python_packages(df.loc[df.index[i], "req"])
 
-                    j = 0
-                    for ele in eles:
-                        if ele != 'waste':
-                            if j == 0:
-                                packets[i] += f'{ele}'
-                            else:
-                                packets[i] += f', {ele}'
-                            j += 1
-                    packets[i] += '],'
+                        j = 0
+                        for ele in eles:
+                            if ele != 'waste':
+                                if j == 0:
+                                    packets[i] += f'{ele}'
+                                else:
+                                    packets[i] += f', {ele}'
+                                j += 1
+                        packets[i] += '],'
 
-                packets = ['requires_dict = {'] + packets
-                packets = packets + ['}']
+                    packets = ['requires_dict = {'] + packets
+                    packets = packets + ['}']
 
-                new_set_up = ['' for _ in range(start+len(contents)-stop+len(packets))]
-                new_set_up[:start+1] = contents[:start+1]
-                new_set_up[start+1:len(packets)+1] = packets
-                new_set_up[start+1+len(packets):] = contents[stop:]
+                    new_set_up = ['' for _ in range(start+len(contents)-stop+len(packets))]
+                    new_set_up[:start+1] = contents[:start+1]
+                    new_set_up[start+1:len(packets)+1] = packets
+                    new_set_up[start+1+len(packets):] = contents[stop:]
+                else:
+                    print('missing version start/stop tag')
+                    new_set_up = contents
 
                 with open("setup.py", "w") as f:
                     for s in new_set_up:

@@ -45,6 +45,7 @@ def main():
     # se trovo il file setup.py e non ho un mode dagli argomenti passati allora imposto mode come lib
     mode = 'lib' if os.path.exists('setup.py') else 'script'
     mode = kwargs['mode'] if kwargs['mode'] is not None else mode
+    print(f'selected mode: {mode}')
 
     lmt = LibMapperTools(lib_name=lib_name, remove=remove, replace_dict=replace_dict, exclusion=exclusion,
                          librerie_private=librerie_private, mode=mode)
