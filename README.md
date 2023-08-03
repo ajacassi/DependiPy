@@ -221,21 +221,21 @@ i passi da fare sono i seguenti:
     
     plugins:
       - mkdocstrings
-        - search
+      - search
     
     markdown_extensions:
       - pymdownx.highlight:
           anchor_linenums: true
-        - pymdownx.inlinehilite
-        - pymdownx.snippets
-        - admonition
-        - pymdownx.arithmatex:
-            generic: true
-        - footnotes
-        - pymdownx.details
-        - pymdownx.superfences
-        - pymdownx.mark
-        - attr_list
+      - pymdownx.inlinehilite
+      - pymdownx.snippets
+      - admonition
+      - pymdownx.arithmatex:
+          generic: true
+      - footnotes
+      - pymdownx.details
+      - pymdownx.superfences
+      - pymdownx.mark
+      - attr_list
     
     nav:
       - index.md
