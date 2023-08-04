@@ -46,13 +46,15 @@ Il file config deve avere la seguente struttura:
       "azure-mgmt-costmanagement"
     ]},
   "exclude_lib": ["tensorflow", "setuptools"],
-  "exclude_folder": ["tests", "__pycache__", "discontinue", "git", "idea"]
+  "exclude_folder": ["tests", "__pycache__", "discontinue", "git", "idea"],
+  "force_version": {"pandas": "pandas==1.1.1", "numpy": "numpy"}
 }
 ```
 - **privat_lib**: sono le librerie private usate che non sono presenti su PyPi e che quindi non devono essere listate in un file di requirements, non potendo essere installate in automatico
 - **replace_lib**: sono le parole che devono essere sostituite nella ricerca delle librerie, dato che alcune librerie usano nomi diversi negli import dalle release su PyPi
 - **exclude_lib**: librerie che sono presenti nei file ma che non si vuole che vengano riportate
 - **exclude_folder**: cartelle che non devono essere considerate durante lo scan delle dipendenze
+- **force_version** sono le librerie di cui si vuole forzare una versione, viene usato un formato a dizionario dove la chiave e' la libreria identificata e il valore e' la stringa che si vuole usare dei requirements, si puo mettere una versione specifica o inserire solo il nome per non segnalare nessuna versione
 
 **Le librerie inserite nel requirements.txt sono sempre e solo quelle che devono essere installate, per cui non verranno mai riportate le dipendenze native di Python**
 

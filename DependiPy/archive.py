@@ -8,11 +8,12 @@ import pkg_resources
 
 class LibMapperTools:
 
-    def __init__(self, lib_name, remove, replace_dict, exclusion, librerie_private=None, mode='lib'):
+    def __init__(self, lib_name, remove, replace_dict, exclusion, force_version, librerie_private=None, mode='lib'):
         self.lib_name = lib_name
         self.remove = remove
         self.replace_dict = replace_dict
         self.exclusion = exclusion
+        self.force_version = force_version
         self.number_of_levels = 0
         self.librerie_private = librerie_private
         self.mode = mode
@@ -241,7 +242,7 @@ class LibMapperTools:
     def write_mapping(self, df, **kwargs):
 
         # per poter scrivere i requisiti nel posto giusto si riporta la posizione di lavoro nel punto di partenza se in modalita script
-        if kwargs['mode'] == 'script': os.chdir(self.lib_name)
+        if self.mode == 'script': os.chdir(self.lib_name)
 
         # vengono trovate tutte le librerie usate nel progetto
         single_requirements = set([item for sublist in df['req'].tolist() for item in sublist])
@@ -424,8 +425,11 @@ class LibMapperTools:
                 for req_i in req_list:
                     try:
                         version = pkg_resources.get_distribution(req_i).version
-                        requirements_versioned.append(f'{req_i}=={version}')
-                        requirements_variable.append(f"{req_i.replace('-', '_')} = '{req_i}=={version}'")
+                        # se il pacchetto e' presente nella lista dei pacchetti di cui forzare la versione, viene usata la versione preimpostata
+                        # in caso contrario viene usata la versione di sistema
+                        version_str = self.force_version[req_i] if req_i in self.force_version else f'{req_i}=={version}'
+                        requirements_versioned.append(version_str)
+                        requirements_variable.append(f"{req_i.replace('-', '_')} = '{version_str}'")
                         variables.append(f"{req_i.replace('-', '_')}")
                     except pkg_resources.DistributionNotFound:
                         distribusion_not_found.append(req_i)

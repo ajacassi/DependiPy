@@ -30,6 +30,8 @@ def main():
     remove = config.get('exclude_lib', [])
     # dizionario per sostituire alcuni nomi se serve
     replace_dict = config.get('replace_lib', {})
+    # lista di librerie di cui si vuole forzare la versione
+    force_version = config.get('force_version', {})
 
     # percorso della libreria
     path = kwargs['path']
@@ -48,7 +50,7 @@ def main():
     print(f'selected mode: {mode}')
 
     lmt = LibMapperTools(lib_name=lib_name, remove=remove, replace_dict=replace_dict, exclusion=exclusion,
-                         librerie_private=librerie_private, mode=mode)
+                         force_version=force_version, librerie_private=librerie_private, mode=mode)
 
     requirements_pd = lmt.read_files()
 
