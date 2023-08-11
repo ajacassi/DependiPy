@@ -157,7 +157,7 @@ class LibMapperTools:
 
     @staticmethod
     def cross_mapping(df, max_deep=7):  # max_deep rappresenta la profondita massima raggiungibile per una catena di cross reference
-        def cross_mapper(_cross_files, _cross_lib_temp, _max_deep):
+        def cross_mapper(_cross_files, _cross_lib_temp, _max_deep, _origin):
             # viene ridotto un contatore di sicurezza che impedisce di restare incastrati in una referenza circolare
             _max_deep = _max_deep - 1
             if _max_deep <= 0: return []
@@ -168,10 +168,15 @@ class LibMapperTools:
                     _cross_lib_temp.update(set(df.loc[df['path_file'] == cross_file, 'req'].iloc[0]))
                 # vengono aggiornate le cross referenze se presenti
                 if df.loc[df['path_file'] == cross_file, 'cross'].shape[0] > 0:
-                    chain_cross = df.loc[df['path_file'] == cross_file, 'cross'].iloc[0]
-                    # in caso di presenza di cross referenze viene chiamata ricorsivamente la funzione di mapping sulla
-                    # nuova cross reference
-                    _cross_lib_temp.update(cross_mapper(chain_cross, _cross_lib_temp, _max_deep))
+                    chain_cross = df.loc[df['path_file'] == cross_file, 'cross'].iloc[0].copy()
+                    # se il file di provenienza e' presente tra i file in cui entrare allora lo rimuovo
+                    if _origin in chain_cross:
+                        id_origin = chain_cross.index(_origin)
+                        chain_cross.pop(id_origin)
+                    if len(chain_cross) > 0:
+                        # in caso di presenza di cross referenze viene chiamata ricorsivamente la funzione di mapping sulla
+                        # nuova cross reference
+                        _cross_lib_temp.update(cross_mapper(chain_cross, _cross_lib_temp, _max_deep, cross_file))
             return _cross_lib_temp
 
         cross_lib_tot = []
@@ -179,9 +184,9 @@ class LibMapperTools:
         files = tqdm(range(df.shape[0]), position=0, leave=True, ascii=True, unit=' files')
         for i in files:
             cross_files = df.iloc[i, df.columns.get_loc('cross')]
-            # origin = df.iloc[i, df.columns.get_loc('path_file')]
+            origin = df.iloc[i, df.columns.get_loc('path_file')]
             # viene chiamata la funzione che estrae le cross referenze
-            cross_lib = cross_mapper(cross_files, set([]), max_deep)
+            cross_lib = cross_mapper(cross_files, set([]), max_deep, origin)
             # i risultati vengono salvati in una lista
             cross_lib_tot.append(list(cross_lib))
 
