@@ -30,6 +30,12 @@ def main():
     remove = config.get('exclude_lib', [])
     # dizionario per sostituire alcuni nomi se serve
     replace_dict = config.get('replace_lib', {})
+    # se nel config non erano state inseriti i rimpiazzi dentro una lista qui vengono gestiti in modo da essere nel formato atteso
+    if len(replace_dict) > 0:
+        for name in replace_dict:
+            if isinstance(replace_dict[name], str):
+                replace_dict[name] = [replace_dict[name]]
+
     # lista di librerie di cui si vuole forzare la versione
     force_version = config.get('force_version', {})
 

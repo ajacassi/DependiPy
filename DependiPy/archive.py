@@ -252,7 +252,7 @@ class LibMapperTools:
         # vengono trovate tutte le librerie usate nel progetto
         single_requirements = set([item for sublist in df['req'].tolist() for item in sublist])
 
-        distribusion_not_found, requirements_variable, requirements_versioned, _ = self.clean_from_python_packages(single_requirements)
+        distribusion_not_found, requirements_variable, requirements_versioned, variables_keys = self.clean_from_python_packages(single_requirements)
 
         print(f'list of distribution not found: {distribusion_not_found}')
 
@@ -372,6 +372,7 @@ class LibMapperTools:
                 # venogono aggiunte le nuove librerie alla lista da scrivere sul file
                 contents[vers_start:vers_start] = requirements_variable
 
+                missing = False
                 if '# start' in contents and '# stop' in contents:
                     start = contents.index('# start')
                     stop = contents.index('# stop')
@@ -402,6 +403,12 @@ class LibMapperTools:
                 else:
                     print('missing version start/stop tag')
                     new_set_up = contents
+                    missing = True
+
+                if missing:
+                    for i, line in enumerate(new_set_up):
+                        if 'install_requires' in line:
+                            new_set_up[i] = f'install_requires={str(variables_keys)},'.replace("'", "")
 
                 with open("setup.py", "w") as f:
                     for s in new_set_up:
