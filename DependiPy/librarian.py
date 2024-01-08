@@ -42,13 +42,16 @@ def main():
     # percorso della libreria
     path = kwargs['path']
     os.chdir(path)
-    os.chdir('..')
+
     # nome della cartella che contiene la libreria, rappresenta il livello 0
-    lib_name = os.path.normpath(path).split('\\')
+    lib_name = os.path.normpath(os.getcwd()).split('\\')
     if lib_name[-1] == '':
         lib_name = lib_name[-2]
     else:
         lib_name = lib_name[-1]
+
+    # esco dalla cartella selezionata per vederla da fuori
+    os.chdir('..')
 
     # se trovo il file setup.py e non ho un mode dagli argomenti passati allora imposto mode come lib
     mode = 'lib' if os.path.exists('setup.py') else 'script'
