@@ -120,8 +120,9 @@ class LibMapperTools:
 
                 # vengono sostituite le librerie segnate come da sostituire
                 if _ele in self.replace_dict:
-                    _list += self.replace_dict[_ele]
-                    _list.remove(_ele)
+                    if _ele in _list:
+                        _list += self.replace_dict[_ele]
+                        _list.remove(_ele)
             return _list
         else:
             # viene restituito NaN se un file non ha librerie
