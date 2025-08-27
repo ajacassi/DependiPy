@@ -15,9 +15,9 @@ with open("DependiPy/version.py", "r") as f:
 version = version[0].split("'")[1]
 
 argparse = 'argparse==1.4.0'
-tqdm = 'tqdm==4.64.1'
+tqdm = 'tqdm>=4.64.1'
 pandas = 'pandas==2.0.0'
-numpy = 'numpy==1.23.5'
+numpy = 'numpy>=1.23.5'
 
 setup(
     name='DependiPy',
