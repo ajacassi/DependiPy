@@ -42,13 +42,13 @@ class LibMapperTools:
                     # filtro per i soli script python
                     if file.split(".")[-1] == "py" and not file.startswith('test'):
                         try:
-                            with open(dirpath + "/" + file, "r") as f:
+                            with open(dirpath + "/" + file, "r", encoding='utf-8') as f:
                                 contents = f.read()
                             # il contenuto del file viene madato alla funzione che ne estrae le librerie
                             req = self.books_extraction(contents)
                             req_temp.loc[req_temp.index[i], 'file'] = file
                             req_temp.loc[req_temp.index[i], 'req'] = req
-                        except:
+                        except ValueError as e:
                             print(f'{file} is impossible to read')
                 # viene popolato un dataframe comune a tutti i file
                 df = pd.concat([df, req_temp], ignore_index=True)
