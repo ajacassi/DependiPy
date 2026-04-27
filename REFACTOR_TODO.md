@@ -8,13 +8,6 @@ interna in modo non banale.
 
 ## Architetturale
 
-- **Rimuovere pandas e numpy come dipendenze runtime.**
-  Tutta la logica in `archive.py` è realizzabile con `list[dict]` o
-  `dataclass`. L'overhead di pandas su una libreria di mappatura
-  dipendenze è ironico e rallenta lo startup. Refactor invasivo che tocca
-  `read_files`, `add_path`, `cross_mapping`, `level_explorer`,
-  `add_levels`, `write_mapping`.
-
 - **Eliminare `os.walk` cieco e modificare `dirnames` in place** per non
   scendere nelle cartelle escluse (efficienza su repo grandi).
 

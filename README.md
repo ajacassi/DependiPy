@@ -18,6 +18,7 @@ per usare le funzionalita di mapping venogno richiesti 1 parametro obligatorio e
     - *script*, se si vuole mappare le dipendenze di una script con le librerie custom
   - **config**, vuole il percorso ad un file di config con alcune info aggiuntive su enventuali modifiche dal funzionamento standard. Il config deve essere un file json.
   - **docs_only**, se attivata questa modalita non genera i file dei requirements o setup.py ma solo i file per la documentazione
+  - **inline_private**, se attivata, le dipendenze (Requires-Dist) delle librerie private effettivamente importate dal codice vengono inserite come dipendenze dirette nel `requirements.txt` del progetto. Richiede che le librerie private siano pip-installate nel sistema da cui si lancia lo script, dato che le loro dipendenze vengono lette dai metadati del pacchetto installato. Se una libreria privata e' configurata ma non installata, viene emesso un warning e l'esecuzione prosegue senza espandere quella libreria.
 
 Se si sta lavorando in lib la cartella indicata nel path è la cartella della libreria, non quella che contiene il setup.py ma quella un livello piu interno a setup.py.
 Se si sta lavorando in script la cartella indicata è quella che contiene lo/gli script.
@@ -28,6 +29,11 @@ Libraria è in grado di mappare le cross dipendenze dentro la libreria indicata.
 l'esecuzione va invocata come di seguito:
 ```bash
 DependiPy -p <path> -m <mode> -c <config.json>
+```
+
+con `--inline_private` (alias `-ip`) per espandere le dipendenze delle librerie private:
+```bash
+DependiPy -p <path> -m <mode> -c <config.json> --inline_private
 ```
 
 Il file config deve avere la seguente struttura:
@@ -130,6 +136,32 @@ Librarian mappera le connessioni con tali librerie e produrra un risultato sul t
 una riga per libreria indicata.
 
 Queste righe vanno copiate e incollate in fare di installazione dello script per installare le sole dipendenze delle librerie necessarie per il funzionamento dello scritp
+
+## inline_private: appiattire i requirements delle librerie private
+Se nel codice vengono usate librerie private (configurate in `private_lib`), per default le loro dipendenze
+non vengono riportate nel `requirements.txt`: chi installa il progetto deve avere accesso alla libreria
+privata, e attraverso essa al pip resolver, per ottenere le sotto-dipendenze.
+
+Con il flag `--inline_private` (alias `-ip`) librarian legge i metadati delle librerie private
+**pip-installate nel sistema** e ne estrae le `Requires-Dist`, inserendole come dipendenze dirette nel
+`requirements.txt` del progetto. In questo modo chi installa il progetto puo' risolvere tutte le
+dipendenze concrete senza avere accesso al codice della libreria privata.
+
+```bash
+DependiPy -p ./my_script -c config.json --inline_private
+```
+
+Esempio: se `my_script` importa la libreria privata `Tages` e questa dichiara come dipendenze
+`pandas>=1.5` e `requests`, dopo l'esecuzione con `--inline_private` il `requirements.txt` conterra'
+`pandas==<versione installata>` e `requests==<versione installata>` accanto alle altre dipendenze
+dirette di `my_script`.
+
+Note importanti:
+- Le librerie private devono essere **pip-installate nel sistema** da cui si lancia lo script: i requisiti vengono letti dai metadati del pacchetto installato (`importlib.metadata.requires`), non dal sorgente.
+- Vengono espanse solo le librerie private **effettivamente importate** dal codice analizzato, non tutte quelle dichiarate in `private_lib`.
+- Le dipendenze "extra" opzionali (es. `; extra == "dev"`) vengono ignorate, perche' non installate di default.
+- Se una catena di librerie private dipende da altre librerie private, l'espansione e' ricorsiva: il risultato finale contiene solo pacchetti pubblici.
+- Se una libreria privata e' configurata ma non installata, viene emesso un warning visibile e l'esecuzione prosegue senza espandere quella libreria.
 
 ## escludere alcune librerie o cartelle specifiche
 Per escludere cartelle specifiche dalla mappatura in modalita lib è possibile aggiungere nomi di cartelle alla lista:

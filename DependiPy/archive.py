@@ -1,11 +1,18 @@
 import ast
 import os
+import re
 import sys
 import warnings
 from dataclasses import dataclass, field
 from importlib import metadata
 from pathlib import Path
 from tqdm import tqdm
+
+
+# match del nome di un pacchetto all'inizio di una stringa Requires-Dist.
+# I nomi PyPI ammettono lettere, numeri, '-', '_', '.' (PEP 508). La regex ferma al primo char
+# non valido (spazio, parentesi, comparatore, semicolon, ecc.).
+_PKG_NAME_RE = re.compile(r'^\s*([A-Za-z0-9_][A-Za-z0-9_.\-]*)')
 
 
 @dataclass
@@ -38,6 +45,17 @@ class LibMapperTools:
         # gli script "fratelli" si importano direttamente per nome (es. `from utils import x`):
         # senza questo set verrebbero scambiati per dipendenze esterne mancanti. Popolato in read_files.
         self.local_modules = set()
+
+        # nomi delle librerie private effettivamente importate dal codice analizzato. Popolato in
+        # cleaning(). Serve a write_mapping quando inline_private=True per espandere le Requires-Dist
+        # delle sole librerie private davvero usate (e non di tutte quelle in config).
+        self.used_private_libs = set()
+
+        # path completi degli import di librerie private (es. 'Tages.preprocess.time_series.data_preparation').
+        # Serve in mode script con --inline_private a selezionare gli extras della lib privata da
+        # espandere: una libreria privata mappata con DependiPy ha le sue dipendenze in extras_require,
+        # uno per ramo, e qui si tiene traccia di quali rami sono effettivamente importati.
+        self.used_private_paths = set()
 
     def read_files(self):
         """Esplora self.lib_root e produce una lista di FileRecord, uno per ogni .py valido."""
@@ -147,6 +165,15 @@ class LibMapperTools:
             # cross-reference interne alla libreria: vengono gestite altrove (cross_mapping)
             if head == self.lib_name:
                 continue
+            # tengo traccia delle librerie private effettivamente importate: e' l'input per
+            # l'espansione delle Requires-Dist quando inline_private=True
+            if head in self.librerie_private:
+                self.used_private_libs.add(head)
+                # in mode script gli import privati sono conservati col path completo
+                # (es. 'Tages.preprocess.time_series.data_preparation'): lo salvo per
+                # poter selezionare gli extras corrispondenti a inline-private time
+                if self.mode == 'script':
+                    self.used_private_paths.add(_ele)
             # librerie private in mode lib: non finiscono nei requirements (non sono su PyPI)
             if head in self.librerie_private and self.mode == 'lib':
                 continue
@@ -255,6 +282,21 @@ class LibMapperTools:
         single_requirements = set()
         for r in records:
             single_requirements.update(r.req)
+
+        # se richiesto, espando le Requires-Dist delle librerie private effettivamente importate
+        # nel codice. In questo modo le dipendenze transitive di una lib privata diventano
+        # dipendenze dirette del progetto, evitando che chi installa il progetto debba avere
+        # accesso alla lib privata per scoprirne i requirements.
+        if kwargs.get('inline_private', False) and self.used_private_libs:
+            extra = self._expand_private_lib_dependencies(
+                self.used_private_libs, self.used_private_paths,
+            )
+            if extra:
+                print(f"inline-private: adding {len(extra)} transitive deps from "
+                      f"{sorted(self.used_private_libs)} "
+                      f"(branches: {sorted(self.used_private_paths) or 'base only'}): "
+                      f"{sorted(extra)}")
+                single_requirements.update(extra)
 
         distribution_not_found, requirements_variable, requirements_versioned, variables_keys = self.clean_from_python_packages(single_requirements)
 
@@ -457,3 +499,71 @@ class LibMapperTools:
                         stacklevel=2,
                     )
         return distribution_not_found, requirements_variable, requirements_versioned, variables
+
+    def _expand_private_lib_dependencies(self, used_private_libs, used_private_paths=None):
+        """Per ogni libreria privata effettivamente importata, legge le sue Requires-Dist
+        (i requirements dichiarati al momento dell'installazione pip) e restituisce un set
+        di nomi di pacchetti da aggiungere ai requirements del progetto.
+
+        Selezione delle dipendenze:
+        - Le dipendenze "base" (senza environment marker `extra ==`) sono sempre incluse.
+        - Le dipendenze in extras (`; extra == "<nome>"`) sono incluse solo se `<nome>`
+          compare in `used_private_paths`. Cosi una libreria privata mappata con DependiPy
+          stesso (che mette tutte le dipendenze in `extras_require`, una per ramo del codice)
+          contribuisce solo le dipendenze dei rami davvero importati - lo stesso modello di
+          `pip install Tages[Tages.preprocess.X]`.
+        - Espande ricorsivamente le sotto-dipendenze a loro volta private (BFS con visited),
+          cosi una catena di librerie private viene "appiattita" sui pacchetti pubblici.
+        - Se una private e' in config ma non installata, emette un warning e prosegue.
+        """
+        if used_private_paths is None:
+            used_private_paths = set()
+        expanded = set()
+        visited = set()
+        pending = list(used_private_libs)
+        while pending:
+            plib = pending.pop()
+            if plib in visited:
+                continue
+            visited.add(plib)
+            try:
+                requires = metadata.requires(plib) or []
+            except metadata.PackageNotFoundError:
+                warnings.warn(
+                    f"Private library '{plib}' is configured in private_lib and imported by "
+                    f"the code, but is NOT installed in the current environment. Cannot expand "
+                    f"its Requires-Dist for --inline_private. Install it and re-run.",
+                    stacklevel=2,
+                )
+                continue
+            for req_str in requires:
+                extra_name = self._parse_extra_name(req_str)
+                # filtro per gli extras: includo solo se il nome dell'extra coincide con un
+                # ramo realmente importato. Per le dipendenze "base" (extra_name is None) procedo.
+                if extra_name is not None and extra_name not in used_private_paths:
+                    continue
+                dep_name = self._parse_dep_name(req_str)
+                if not dep_name:
+                    continue
+                if dep_name in self.librerie_private:
+                    # la dipendenza e' a sua volta privata: l'appiattiamo seguendone le Requires-Dist
+                    pending.append(dep_name)
+                else:
+                    expanded.add(dep_name)
+        return expanded
+
+    @staticmethod
+    def _parse_extra_name(req_str):
+        """Restituisce il nome dell'extra se la Requires-Dist e' condizionata da `extra == "..."`,
+        altrimenti None. Es: 'pandas; extra == "Tages.preprocess.X"' -> 'Tages.preprocess.X'."""
+        if ';' not in req_str:
+            return None
+        marker = req_str.split(';', 1)[1]
+        m = re.search(r'extra\s*==\s*["\']([^"\']+)["\']', marker)
+        return m.group(1) if m else None
+
+    @staticmethod
+    def _parse_dep_name(req_str):
+        """Estrae il nome del pacchetto da una stringa Requires-Dist (es. 'pandas (>=1.5)' -> 'pandas')."""
+        m = _PKG_NAME_RE.match(req_str)
+        return m.group(1) if m else None

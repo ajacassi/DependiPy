@@ -15,6 +15,11 @@ def main():
     parser.add_argument('-c', '--config', help="config file", required=False, default='config.json')
     parser.add_argument('-do', '--docs_only', help="generate only the documentation",
                         action='store_true')
+    parser.add_argument('-ip', '--inline_private',
+                        help="inline the Requires-Dist of pip-installed private libraries into "
+                             "requirements.txt (transitive expansion). Requires the private libs "
+                             "to be installed in the current environment.",
+                        action='store_true')
 
     kwargs = vars(parser.parse_args())
 
