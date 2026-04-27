@@ -1,22 +1,33 @@
 import ast
-import pandas as pd
 import os
+import sys
+import warnings
+from importlib import metadata
+from pathlib import Path
+import pandas as pd
 import numpy as np
 from tqdm import tqdm
-import pkg_resources
 
 
 class LibMapperTools:
 
-    def __init__(self, lib_name, remove, replace_dict, exclusion, force_version, librerie_private=None, mode='lib'):
+    def __init__(self, lib_name, lib_root, working_dir, remove, replace_dict, exclusion, force_version,
+                 librerie_private=None, mode='lib'):
         self.lib_name = lib_name
+        self.lib_root = Path(lib_root).resolve()
+        self.working_dir = Path(working_dir).resolve()
         self.remove = remove
         self.replace_dict = replace_dict
         self.exclusion = exclusion
         self.force_version = force_version
         self.number_of_levels = 0
-        self.librerie_private = librerie_private
+        self.librerie_private = librerie_private if librerie_private is not None else []
         self.mode = mode
+
+        # nomi dei moduli locali al progetto (file .py e cartelle dentro lib_root). In mode script
+        # gli script "fratelli" si importano direttamente per nome (es. `from utils import x`):
+        # senza questo set verrebbero scambiati per dipendenze esterne mancanti. Popolato in read_files.
+        self.local_modules = set()
 
         # lista di colonne, serve per il codice
         self.saved_columns = ['file', 'req', 'path']
@@ -24,13 +35,26 @@ class LibMapperTools:
     def read_files(self):
         # vengono cergati tutti i file dentro la libreria
         df = pd.DataFrame()
-        for (dirpath, dirnames, filenames) in os.walk(self.lib_name):
-            # vengono salvato i percorsi di ogni file
-            path = dirpath.replace("/", "").replace(".", "").replace("\\", ".")
-            # il percorso viene rotto nelle sue componenti e messo in una lista
-            levels = path.split(".")
+        # base da cui calcolare i percorsi relativi: il parent della cartella della libreria,
+        # cosi che il modulo di primo livello sia self.lib_name
+        base = self.lib_root.parent
+        local_modules = set()
+        for (dirpath, dirnames, filenames) in os.walk(self.lib_root):
+            # path relativo alla base, normalizzato in forma "lib.sub.folder" (cross-platform)
+            rel_parts = Path(dirpath).resolve().relative_to(base).parts
+            path = ".".join(rel_parts)
+            levels = list(rel_parts)
             # se dopo aver eliminato le cartelle da escludere rimangono delle cartelle allora si prosegue con il parsing
             if not len(set(self.exclusion).intersection(levels)) > 0:
+                # raccolgo i nomi dei moduli locali: cartelle (potenziali sub-package) e file .py
+                # senza estensione. Servono in mode script per non confondere import "fratelli" con
+                # dipendenze esterne mancanti.
+                for d in dirnames:
+                    if d not in self.exclusion and not d.startswith('__'):
+                        local_modules.add(d)
+                for f in filenames:
+                    if f.endswith('.py') and f != '__init__.py':
+                        local_modules.add(f[:-3])
                 # si inizializza il dataframe temporaneo in cui si salvano le librerie di ogni file uno ad uno
                 req_temp = pd.DataFrame(columns=["level_" + str(i) for i in range(len(levels))] + self.saved_columns,
                                         index=[i for i in range(len(filenames))])
@@ -41,15 +65,16 @@ class LibMapperTools:
                 for i, file in enumerate(filenames):
                     # filtro per i soli script python
                     if file.split(".")[-1] == "py" and not file.startswith('test'):
+                        full_path = os.path.join(dirpath, file)
                         try:
-                            with open(dirpath + "/" + file, "r", encoding='utf-8') as f:
+                            with open(full_path, "r", encoding='utf-8') as f:
                                 contents = f.read()
                             # il contenuto del file viene madato alla funzione che ne estrae le librerie
                             req = self.books_extraction(contents)
                             req_temp.loc[req_temp.index[i], 'file'] = file
                             req_temp.loc[req_temp.index[i], 'req'] = req
-                        except ValueError as e:
-                            print(f'{file} is impossible to read')
+                        except (SyntaxError, OSError, UnicodeDecodeError) as e:
+                            print(f'{file} is impossible to read ({type(e).__name__}: {e})')
                 # viene popolato un dataframe comune a tutti i file
                 df = pd.concat([df, req_temp], ignore_index=True)
                 # se un file non viene considerato perche non ha il .py con il drop viene eliminata la sua riga
@@ -60,17 +85,24 @@ class LibMapperTools:
         # si riordinano le colonne
         df = df.loc[:, ["level_" + str(i) for i in range(number_of_levels)] + self.saved_columns]
         self.number_of_levels = number_of_levels
+        self.local_modules = local_modules
         return df
 
     # funzione parsa il testo del codice ed estrae i nomi delle librerie usate
     def books_extraction(self, text):
         modules = []
-        # usando la libreria ast vengono trovati gli import
-        for node in ast.iter_child_nodes(ast.parse(text)):
+        # ast.walk esplora tutto l'albero, non solo il livello top: cosi vengono catturati anche gli import
+        # dentro try/except, funzioni, classi, blocchi if (es. lazy imports)
+        for node in ast.walk(ast.parse(text)):
             if isinstance(node, ast.ImportFrom):
-                modules.append(node.module)
+                # i relative imports (from . import x, from .sub import y) sono interni al package
+                # e non vanno tracciati come dipendenze esterne
+                if node.level == 0 and node.module:
+                    modules.append(node.module)
             elif isinstance(node, ast.Import):
-                modules.append(node.names[0].name)
+                # 'import a, b, c' produce piu alias: vanno raccolti tutti
+                for alias in node.names:
+                    modules.append(alias.name)
 
         # se gli import erano divisi in un percorso viene preso solo il primo elemento del percorso
         def select_first(name):
@@ -104,29 +136,39 @@ class LibMapperTools:
 
     # funzione che fa pulizia sulle librerie nella lista che gli viene passata
     def cleaning(self, _list):
-        elements = _list.copy()
-        if len(_list) > 0:
-            for _ele in elements:
-                # vengono rimosse le librerie legate alle cross reference
-                if _ele.split(".")[0] == self.lib_name:
-                    _list.remove(_ele)
-                # vengono rimossi i riferimenti alle librerie private
-                elif _ele.split('.')[0] in self.librerie_private and self.mode == 'lib':  # la condizione e' elif perche la lib_name potrebbe essere anche una libreria privata
-                    _list.remove(_ele)
+        # costruisco una lista nuova invece di mutare quella in input: cosi le condizioni non si
+        # interferiscono fra loro (un elemento da rimuovere e da sostituire non finisce piu in
+        # double-remove con ValueError)
+        cleaned = []
+        for _ele in _list:
+            head = _ele.split('.')[0]
+            # cross-reference interne alla libreria: vengono gestite altrove (cross_mapping)
+            if head == self.lib_name:
+                continue
+            # librerie private in mode lib: non finiscono nei requirements (non sono su PyPI)
+            if head in self.librerie_private and self.mode == 'lib':
+                continue
+            # in mode script: i moduli "fratelli" dello stesso progetto (file .py / cartelle sotto
+            # lib_root) si importano per nome diretto e non sono dipendenze esterne
+            if self.mode == 'script' and head in self.local_modules:
+                continue
+            # librerie esplicitamente da escludere
+            if _ele in self.remove:
+                continue
+            # librerie da sostituire (es. sklearn -> scikit-learn)
+            if _ele in self.replace_dict:
+                cleaned.extend(self.replace_dict[_ele])
+                continue
+            cleaned.append(_ele)
 
-                # vengono rimosse le librerie segnate come da eliminare
-                if _ele in self.remove:
-                    _list.remove(_ele)
-
-                # vengono sostituite le librerie segnate come da sostituire
-                if _ele in self.replace_dict:
-                    if _ele in _list:
-                        _list += self.replace_dict[_ele]
-                        _list.remove(_ele)
-            return _list
-        else:
-            # viene restituito NaN se un file non ha librerie
-            return []
+        # dedup mantenendo l'ordine di prima apparizione
+        seen = set()
+        result = []
+        for el in cleaned:
+            if el not in seen:
+                seen.add(el)
+                result.append(el)
+        return result
 
     @staticmethod
     def remove_unrequired(df):
@@ -247,32 +289,35 @@ class LibMapperTools:
 
     def write_mapping(self, df, **kwargs):
 
-        # per poter scrivere i requisiti nel posto giusto si riporta la posizione di lavoro nel punto di partenza se in modalita script
-        if self.mode == 'script': os.chdir(self.lib_name)
+        # working_dir = parent della libreria (mode lib, dove c'e' setup.py) o la libreria stessa (mode script).
+        # Tutte le scritture passano per questo path: niente piu os.chdir.
+        wd = self.working_dir
 
         # vengono trovate tutte le librerie usate nel progetto
         single_requirements = set([item for sublist in df['req'].tolist() for item in sublist])
 
-        distribusion_not_found, requirements_variable, requirements_versioned, variables_keys = self.clean_from_python_packages(single_requirements)
+        distribution_not_found, requirements_variable, requirements_versioned, variables_keys = self.clean_from_python_packages(single_requirements)
 
-        print(f'list of distribution not found: {distribusion_not_found}')
+        print(f'list of distribution not found: {distribution_not_found}')
 
-        if ('docs_only' in kwargs and kwargs.get('docs_only') == False) or 'docs_only' not in kwargs:
+        if not kwargs.get('docs_only', False):
             # viene scritto il file dei requisiti
-            with open("requirements.txt", "w") as f:
+            with open(wd / "requirements.txt", "w", encoding='utf-8') as f:
                 for s in requirements_versioned:
                     f.write(s + "\n")
 
         ###############################
         # da aggiungere la parte che costruisce la documentazione
-        if os.path.exists('docs') and os.path.exists('mkdocs.yml'):
+        docs_dir = wd / 'docs'
+        mkdocs_yml = wd / 'mkdocs.yml'
+        if docs_dir.exists() and mkdocs_yml.exists():
             for i in range(df.shape[0]):
                 if df.loc[df.index[i], f'file'] != "__init__.py":
                     name = df.loc[df.index[i], 'path_file']
-                    with open(f"docs/{name}.md", "w") as f:
+                    with open(docs_dir / f"{name}.md", "w", encoding='utf-8') as f:
                         f.write(f"::: {name}")
 
-            with open("mkdocs.yml", "r") as f:
+            with open(mkdocs_yml, "r", encoding='utf-8') as f:
                 contents_yml = f.readlines()
 
             for i in range(len(contents_yml)):
@@ -289,9 +334,9 @@ class LibMapperTools:
                 yml_stop = contents_yml[yml_start:].index('') + yml_start + 1
                 api_is_here = False
             else:
-                yml_start, yml_stop = 0, 0
-                print('missing the proper tag in the mkdocs.yml')
-                exit()
+                raise ValueError(
+                    f"missing the proper tag in {mkdocs_yml}: expected '  - API:' or 'nav:'"
+                )
 
             #######################################################################################
             docs = []
@@ -318,12 +363,12 @@ class LibMapperTools:
             docs.append('')
             contents_yml[yml_start:yml_start+1] = docs
 
-            with open("mkdocs.yml", "w") as f:
+            with open(mkdocs_yml, "w", encoding='utf-8') as f:
                 for s in contents_yml:
                     f.write(str(s) + "\n")
 
         ###############################
-        if ('docs_only' in kwargs and kwargs.get('docs_only') == False) or 'docs_only' not in kwargs:
+        if not kwargs.get('docs_only', False):
 
             if self.mode == 'script':
                 list_privat_reference = ['[' for _ in range(len(self.librerie_private))]
@@ -341,8 +386,9 @@ class LibMapperTools:
                 print()
 
             if self.mode == 'lib':
-                if not os.path.exists('setup.py'):
-                    raise ValueError('missing the setup.py file mandatory for the script')
+                setup_path = wd / 'setup.py'
+                if not setup_path.exists():
+                    raise ValueError(f'missing setup.py at {setup_path}, mandatory for mode lib')
 
                 df = self.cross_mapping(df)
                 df = self.add_levels(df)
@@ -351,7 +397,7 @@ class LibMapperTools:
                 df.loc[:, 'original'] = df.loc[:, 'path'].copy()
                 df.loc[:, 'path'] = df.loc[:, 'path'].str.replace(".", "_", regex=False)
 
-                with open("setup.py", "r") as f:
+                with open(setup_path, "r", encoding='utf-8') as f:
                     contents = f.readlines()
 
                 for i in range(len(contents)):
@@ -363,9 +409,9 @@ class LibMapperTools:
                     vers_start = contents.index('# version go') + 1
                     vers_stop = contents.index('# version end')
                 else:
-                    vers_start, vers_stop = 0, 0
-                    print('missing version go/end tag')
-                    exit()
+                    raise ValueError(
+                        f"missing '# version go' / '# version end' markers in {setup_path}"
+                    )
 
                 # vengono eliminate le librerie dentro i marker
                 del contents[vers_start: vers_stop]
@@ -411,39 +457,48 @@ class LibMapperTools:
                         if 'install_requires' in line:
                             new_set_up[i] = f'install_requires={str(variables_keys)},'.replace("'", "")
 
-                with open("setup.py", "w") as f:
+                with open(setup_path, "w", encoding='utf-8') as f:
                     for s in new_set_up:
                         f.write(str(s) + "\n")
 
-                print(os.getcwd()+"\\setup.py")
+                print(str(setup_path))
 
     def clean_from_python_packages(self, single_requirements):
-        # vengono matchate le librerie del progetto con le versioni da usare
+        # nomi dei moduli della stdlib: filtrati senza warning perche non vanno nei requirements.
+        # sys.stdlib_module_names esiste da Python 3.10; sotto, fallback a frozenset vuoto.
+        stdlib_names = getattr(sys, 'stdlib_module_names', frozenset())
+
         requirements_versioned = []
         requirements_variable = []
-        distribusion_not_found = []
+        distribution_not_found = []
         variables = []
         for req in single_requirements:
-            pass_card = True
+            # salto le librerie private (non sono su PyPI)
+            if any(req.startswith(pl) for pl in self.librerie_private):
+                continue
 
-            # applicato un controllo se la libreira che si vuole inserire fa parte delle librerie private
-            # in quel caso non deve essere messa nel requirement.txt
-            for pl in self.librerie_private:
-                if req.startswith(pl):
-                    pass_card = False
-                    break
-
-            if pass_card:
-                req_list = self.replace_dict[req] if req in self.replace_dict else [req]
-                for req_i in req_list:
-                    try:
-                        version = pkg_resources.get_distribution(req_i).version
-                        # se il pacchetto e' presente nella lista dei pacchetti di cui forzare la versione, viene usata la versione preimpostata
-                        # in caso contrario viene usata la versione di sistema
-                        version_str = self.force_version[req_i] if req_i in self.force_version else f'{req_i}=={version}'
-                        requirements_versioned.append(version_str)
-                        requirements_variable.append(f"{req_i.replace('-', '_')} = '{version_str}'")
-                        variables.append(f"{req_i.replace('-', '_')}")
-                    except pkg_resources.DistributionNotFound:
-                        distribusion_not_found.append(req_i)
-        return distribusion_not_found, requirements_variable, requirements_versioned, variables
+            req_list = self.replace_dict[req] if req in self.replace_dict else [req]
+            for req_i in req_list:
+                # i moduli della stdlib non vanno nei requirements e non sono un errore
+                if req_i in stdlib_names:
+                    continue
+                try:
+                    version = metadata.version(req_i)
+                    # se il pacchetto e' presente nella lista dei pacchetti di cui forzare la versione, viene usata la versione preimpostata
+                    # in caso contrario viene usata la versione di sistema
+                    version_str = self.force_version[req_i] if req_i in self.force_version else f'{req_i}=={version}'
+                    requirements_versioned.append(version_str)
+                    requirements_variable.append(f"{req_i.replace('-', '_')} = '{version_str}'")
+                    variables.append(f"{req_i.replace('-', '_')}")
+                except metadata.PackageNotFoundError:
+                    # libreria importata ma non installata e non stdlib: prima veniva esclusa silenziosamente
+                    # (=> requirements.txt incompleti senza segnale). Ora warning visibile.
+                    distribution_not_found.append(req_i)
+                    warnings.warn(
+                        f"Package '{req_i}' is imported but not installed in the current "
+                        f"environment and is not part of the standard library. It will NOT "
+                        f"be added to requirements.txt. Install it, or add it to "
+                        f"'private_lib' / 'exclude_lib' / 'replace_lib' in the config.",
+                        stacklevel=2,
+                    )
+        return distribution_not_found, requirements_variable, requirements_versioned, variables

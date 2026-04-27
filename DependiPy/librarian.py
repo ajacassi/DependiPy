@@ -1,7 +1,8 @@
-import os
 import argparse
-from DependiPy.archive import LibMapperTools
 import json
+from pathlib import Path
+
+from DependiPy.archive import LibMapperTools
 
 
 def main():
@@ -12,14 +13,15 @@ def main():
                         required=True)
     parser.add_argument('-m', '--mode', help="lib parser or script parser (lib,script)", required=False)
     parser.add_argument('-c', '--config', help="config file", required=False, default='config.json')
-    parser.add_argument('-do', '--docs_only', help="generate only the documentation", required=False, default=False)
+    parser.add_argument('-do', '--docs_only', help="generate only the documentation",
+                        action='store_true')
 
     kwargs = vars(parser.parse_args())
 
     try:
-        with open(kwargs['config']) as json_file:
+        with open(kwargs['config'], encoding='utf-8') as json_file:
             config = json.load(json_file)
-    except:
+    except (FileNotFoundError, json.JSONDecodeError):
         config = {}
 
     librerie_private = config.get('private_lib', [])
@@ -39,26 +41,26 @@ def main():
     # lista di librerie di cui si vuole forzare la versione
     force_version = config.get('force_version', {})
 
-    # percorso della libreria
-    path = kwargs['path']
-    os.chdir(path)
+    # path della libreria, risolto in assoluto: cosi non dipendiamo dalla cwd e funziona su Linux/Mac/Windows
+    lib_root = Path(kwargs['path']).resolve()
+    if not lib_root.is_dir():
+        raise NotADirectoryError(f"path '{lib_root}' is not a directory")
+    lib_name = lib_root.name
 
-    # nome della cartella che contiene la libreria, rappresenta il livello 0
-    lib_name = os.path.normpath(os.getcwd()).split('\\')
-    if lib_name[-1] == '':
-        lib_name = lib_name[-2]
-    else:
-        lib_name = lib_name[-1]
-
-    # esco dalla cartella selezionata per vederla da fuori
-    os.chdir('..')
+    # parent della libreria: e' qui che sta setup.py in mode lib, ed e' qui che si scrive
+    # requirements.txt / si aggiorna setup.py
+    setup_candidate = lib_root.parent / 'setup.py'
 
     # se trovo il file setup.py e non ho un mode dagli argomenti passati allora imposto mode come lib
-    mode = 'lib' if os.path.exists('setup.py') else 'script'
-    mode = kwargs['mode'] if kwargs['mode'] is not None else mode
+    detected_mode = 'lib' if setup_candidate.exists() else 'script'
+    mode = kwargs['mode'] if kwargs['mode'] is not None else detected_mode
     print(f'selected mode: {mode}')
 
-    lmt = LibMapperTools(lib_name=lib_name, remove=remove, replace_dict=replace_dict, exclusion=exclusion,
+    # in mode lib si scrive nel parent (dove c'e' setup.py); in mode script si lavora dentro la cartella stessa
+    working_dir = lib_root.parent if mode == 'lib' else lib_root
+
+    lmt = LibMapperTools(lib_name=lib_name, lib_root=lib_root, working_dir=working_dir,
+                         remove=remove, replace_dict=replace_dict, exclusion=exclusion,
                          force_version=force_version, librerie_private=librerie_private, mode=mode)
 
     requirements_pd = lmt.read_files()
