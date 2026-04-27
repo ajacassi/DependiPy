@@ -2,11 +2,21 @@ import ast
 import os
 import sys
 import warnings
+from dataclasses import dataclass, field
 from importlib import metadata
 from pathlib import Path
-import pandas as pd
-import numpy as np
 from tqdm import tqdm
+
+
+@dataclass
+class FileRecord:
+    """Rappresenta un singolo file Python mappato dentro la libreria/script."""
+    levels: list   # parts del path relativo, es. ['mylib', 'sub']
+    file: str      # nome del file con estensione, es. 'foo.py'
+    req: list      # lista dei requirements estratti (e poi puliti)
+    path: str      # path con notazione a punti, es. 'mylib.sub'
+    cross: list = field(default_factory=list)  # cross-reference interne (popolato dopo)
+    path_file: str = ""                         # path completo del modulo, es. 'mylib.sub.foo'
 
 
 class LibMapperTools:
@@ -29,64 +39,56 @@ class LibMapperTools:
         # senza questo set verrebbero scambiati per dipendenze esterne mancanti. Popolato in read_files.
         self.local_modules = set()
 
-        # lista di colonne, serve per il codice
-        self.saved_columns = ['file', 'req', 'path']
-
     def read_files(self):
-        # vengono cergati tutti i file dentro la libreria
-        df = pd.DataFrame()
+        """Esplora self.lib_root e produce una lista di FileRecord, uno per ogni .py valido."""
+        records = []
         # base da cui calcolare i percorsi relativi: il parent della cartella della libreria,
         # cosi che il modulo di primo livello sia self.lib_name
         base = self.lib_root.parent
         local_modules = set()
+        max_levels = 0
         for (dirpath, dirnames, filenames) in os.walk(self.lib_root):
             # path relativo alla base, normalizzato in forma "lib.sub.folder" (cross-platform)
             rel_parts = Path(dirpath).resolve().relative_to(base).parts
             path = ".".join(rel_parts)
             levels = list(rel_parts)
-            # se dopo aver eliminato le cartelle da escludere rimangono delle cartelle allora si prosegue con il parsing
-            if not len(set(self.exclusion).intersection(levels)) > 0:
-                # raccolgo i nomi dei moduli locali: cartelle (potenziali sub-package) e file .py
-                # senza estensione. Servono in mode script per non confondere import "fratelli" con
-                # dipendenze esterne mancanti.
-                for d in dirnames:
-                    if d not in self.exclusion and not d.startswith('__'):
-                        local_modules.add(d)
-                for f in filenames:
-                    if f.endswith('.py') and f != '__init__.py':
-                        local_modules.add(f[:-3])
-                # si inizializza il dataframe temporaneo in cui si salvano le librerie di ogni file uno ad uno
-                req_temp = pd.DataFrame(columns=["level_" + str(i) for i in range(len(levels))] + self.saved_columns,
-                                        index=[i for i in range(len(filenames))])
-                # si popola il dataframe
-                req_temp.loc[:, ["level_" + str(i) for i in range(len(levels))]] = levels
-                req_temp.loc[:, 'path'] = path
-                # si legge ogni file
-                for i, file in enumerate(filenames):
-                    # filtro per i soli script python
-                    if file.split(".")[-1] == "py" and not file.startswith('test'):
-                        full_path = os.path.join(dirpath, file)
-                        try:
-                            with open(full_path, "r", encoding='utf-8') as f:
-                                contents = f.read()
-                            # il contenuto del file viene madato alla funzione che ne estrae le librerie
-                            req = self.books_extraction(contents)
-                            req_temp.loc[req_temp.index[i], 'file'] = file
-                            req_temp.loc[req_temp.index[i], 'req'] = req
-                        except (SyntaxError, OSError, UnicodeDecodeError) as e:
-                            print(f'{file} is impossible to read ({type(e).__name__}: {e})')
-                # viene popolato un dataframe comune a tutti i file
-                df = pd.concat([df, req_temp], ignore_index=True)
-                # se un file non viene considerato perche non ha il .py con il drop viene eliminata la sua riga
-                df = df.dropna(subset=['file'])
+            # se il path include una cartella esclusa, salto interamente questo dirpath
+            if set(self.exclusion).intersection(levels):
+                continue
+            # raccolgo i nomi dei moduli locali: cartelle (potenziali sub-package) e file .py
+            # senza estensione. Servono in mode script per non confondere import "fratelli" con
+            # dipendenze esterne mancanti.
+            for d in dirnames:
+                if d not in self.exclusion and not d.startswith('__'):
+                    local_modules.add(d)
+            for f in filenames:
+                if f.endswith('.py') and f != '__init__.py':
+                    local_modules.add(f[:-3])
 
-        # si ottiene il numero di livelli di profondita della classe
-        number_of_levels = df.columns.difference(self.saved_columns).shape[0]
-        # si riordinano le colonne
-        df = df.loc[:, ["level_" + str(i) for i in range(number_of_levels)] + self.saved_columns]
-        self.number_of_levels = number_of_levels
+            for file in filenames:
+                # filtro per i soli script python
+                if not (file.endswith('.py') and not file.startswith('test')):
+                    continue
+                full_path = os.path.join(dirpath, file)
+                try:
+                    with open(full_path, "r", encoding='utf-8') as f:
+                        contents = f.read()
+                except (OSError, UnicodeDecodeError) as e:
+                    print(f'{file} is impossible to read ({type(e).__name__}: {e})')
+                    continue
+                try:
+                    req = self.books_extraction(contents)
+                except SyntaxError as e:
+                    print(f'{file} has a syntax error and will be skipped ({e})')
+                    continue
+                records.append(FileRecord(levels=levels, file=file, req=req, path=path))
+
+            if len(levels) > max_levels:
+                max_levels = len(levels)
+
+        self.number_of_levels = max_levels
         self.local_modules = local_modules
-        return df
+        return records
 
     # funzione parsa il testo del codice ed estrae i nomi delle librerie usate
     def books_extraction(self, text):
@@ -171,130 +173,88 @@ class LibMapperTools:
         return result
 
     @staticmethod
-    def remove_unrequired(df):
-        # i file che non hanno librerie e sono __init__ vengono eliminati dalla mappatura
-        # mentre se un file non ha librerie viene cmq tenuto dentro i percorsi chiamabili
-        allowed_files = []
-        for i in range(df.shape[0]):
-            if (df.loc[df.index[i], 'req'] is pd.NA) and df.loc[df.index[i], 'file'] == "__init__.py":
-                allowed_files.append(False)
-            else:
-                allowed_files.append(True)
-
-        # per riempire la casella req dei file che non hanno librerie con una lista vuota va inserita una lista con
-        # un elemento e poi va rimosso quell'elemento
-        for i in range(df.shape[0]):
-            if df.loc[df.index[i], 'req'] is pd.NA:
-                df.loc[df.index[i], 'req'] = ['waste_list']
-                df.loc[df.index[i], 'req'].remove('waste_list')
-
-        # vengono eliminate gli script marcati come da aliminare perche senza requisiti
-        df = df.loc[allowed_files]
-        return df
+    def add_path(records):
+        """Riempie il campo path_file di ogni record (es. 'mylib.sub.foo')."""
+        for r in records:
+            stem = r.file[:-3] if r.file.endswith('.py') else r.file
+            r.path_file = f"{r.path}.{stem}"
+        return records
 
     @staticmethod
-    def add_path(df):
-        # viene creata una colonna con il contenuto del percorso di un file e il nome del file stesso
-        df.loc[:, 'path_file'] = df.loc[:, 'path'] + "." + df['file'].str.replace('.py', '', regex=True)
-        return df
+    def cross_mapping(records, max_deep=7):
+        """Per ogni record, raccoglie ricorsivamente i requirements provenienti dalle cross-reference
+        interne. max_deep limita la profondita per evitare loop su riferimenti circolari."""
+        # indice path_file -> record per lookup O(1) (prima erano scan lineari del df)
+        by_path = {r.path_file: r for r in records}
 
-    @staticmethod
-    def cross_mapping(df, max_deep=7):  # max_deep rappresenta la profondita massima raggiungibile per una catena di cross reference
-        def cross_mapper(_cross_files, _cross_lib_temp, _max_deep, _origin):
-            # viene ridotto un contatore di sicurezza che impedisce di restare incastrati in una referenza circolare
-            _max_deep = _max_deep - 1
-            if _max_deep <= 0: return []
-            # si cicla sulle cross referenze
-            for cross_file in _cross_files:
-                # vengono aggiornate le referenze se presenti
-                if df.loc[df['path_file'] == cross_file, 'req'].shape[0] > 0:
-                    _cross_lib_temp.update(set(df.loc[df['path_file'] == cross_file, 'req'].iloc[0]))
-                # vengono aggiornate le cross referenze se presenti
-                if df.loc[df['path_file'] == cross_file, 'cross'].shape[0] > 0:
-                    chain_cross = df.loc[df['path_file'] == cross_file, 'cross'].iloc[0].copy()
-                    # se il file di provenienza e' presente tra i file in cui entrare allora lo rimuovo
-                    if _origin in chain_cross:
-                        id_origin = chain_cross.index(_origin)
-                        chain_cross.pop(id_origin)
-                    if len(chain_cross) > 0:
-                        # in caso di presenza di cross referenze viene chiamata ricorsivamente la funzione di mapping sulla
-                        # nuova cross reference
-                        _cross_lib_temp.update(cross_mapper(chain_cross, _cross_lib_temp, _max_deep, cross_file))
-            return _cross_lib_temp
+        def cross_mapper(cross_files, accumulated, depth, origin):
+            depth = depth - 1
+            if depth <= 0:
+                return accumulated
+            for cross_file in cross_files:
+                target = by_path.get(cross_file)
+                if target is None:
+                    continue
+                accumulated.update(target.req)
+                chain_cross = list(target.cross)
+                # rimuovo il file di provenienza per evitare il rimbalzo immediato
+                if origin in chain_cross:
+                    chain_cross.remove(origin)
+                if chain_cross:
+                    cross_mapper(chain_cross, accumulated, depth, cross_file)
+            return accumulated
 
-        cross_lib_tot = []
-        # un file per volta vengono estratte tutti i requirements dalle cross referenze
-        files = tqdm(range(df.shape[0]), position=0, leave=True, ascii=True, unit=' files')
-        for i in files:
-            cross_files = df.iloc[i, df.columns.get_loc('cross')]
-            origin = df.iloc[i, df.columns.get_loc('path_file')]
-            # viene chiamata la funzione che estrae le cross referenze
-            cross_lib = cross_mapper(cross_files, set([]), max_deep, origin)
-            # i risultati vengono salvati in una lista
-            cross_lib_tot.append(list(cross_lib))
+        for r in tqdm(records, position=0, leave=True, ascii=True, unit=' files'):
+            cross_lib = cross_mapper(r.cross, set(), max_deep, r.path_file)
+            if cross_lib:
+                # union + dedup mantenendo un ordine deterministico (alfabetico)
+                r.req = sorted(set(r.req) | cross_lib)
+        return records
 
-        # vengono eliminate le colonne che servivano solo alle cross referenze
-        df = df.loc[:, df.columns.difference(['cross', 'path_file'])]
-
-        # variabile che verifica il numero di cross referenze
-        empty_check = 0
-        for crosses in cross_lib_tot:
-            empty_check += len(crosses)
-
-        # alle referenze di ogni file vengono aggiunte le referenze estratte con il cross mapping e vengono eliminati i duplicati
-        if empty_check > 0:
-            _list_np = df.loc[:, 'req'] + np.array(cross_lib_tot, dtype=object)
-            df.loc[:, 'req'] = _list_np.apply(set).apply(list)
-        return df
-
-    def level_explorer(self, df, level, max_levels, pre_cat, _res):
+    def level_explorer(self, records, level, max_levels, pre_cat, results):
+        """Esplora ricorsivamente l'albero delle cartelle: per ogni "bivio" raccoglie l'unione dei
+        requirements di tutti i file sotto quel sottoalbero. Cosi un install
+        `pip install ./lib[mylib.sub]` puo tirare giu tutte le dipendenze del sotto-package.
         """
-            funzione ricorsica che mappa l'albero della libreria e verifica come ogni referenza dei file contenuti in un ramo
-            debbano essere usati se si chiede tutte le referenze di un bivio piu un alto
-        """
+        if level >= max_levels:
+            return results
+        # group by levels[level]: solo i record che arrivano almeno fino a questo livello
+        groups = {}
+        for r in records:
+            if len(r.levels) > level:
+                groups.setdefault(r.levels[level], []).append(r)
 
-        # un controllo impedisce un loop infinito andando a fermare la mappatura quando si raggunge la profondita massima dell'albero
-        if level >= max_levels: return _res
-        # vengono ottenuti i nomi delle cartelle di uno specifico livello
-        category1 = df.dropna(subset='level_' + str(level))['level_' + str(level)].unique()
-        # si cicla su ogni cartella
-        for cat1 in category1:
-            # viene fatta la selezione del dataframe con i soli valori corispondenti a una cartella
-            cat_df1 = df.loc[df['level_' + str(level)] == cat1, :].dropna(subset='level_' + str(level))
-            # vengono estratti tutti i requisiti di tutti i file presenti in quella cartella e sotto cartelle
-            selection1 = list(set(cat_df1.loc[:, 'req'].sum()))
-            # viene mappata la posizione nell'albero
-            level_name = pre_cat + cat1
-            # se erano presenti requisiti si prosegue
-            if len(selection1) > 0:
-                # i requisiti trovati vengono caricati in un dataframe
-                temp_pd = pd.DataFrame(columns=['path', 'req'], index=[0])
-                temp_pd.loc[temp_pd.index[0], 'req'] = selection1
-                temp_pd.loc[temp_pd.index[0], 'path'] = level_name
-                _res = pd.concat([_res, temp_pd], ignore_index=True)
-            # se sono prenenti altri livelli viene chiamata ricorsivamente la stessa funzione di mappatura
-            _res = self.level_explorer(cat_df1, level=level + 1, max_levels=max_levels, pre_cat=level_name + ".",
-                                       _res=_res)
-        return _res
+        for cat, group in groups.items():
+            # unione dei requirements di tutti i file del sottoalbero
+            all_req = set()
+            for r in group:
+                all_req.update(r.req)
+            level_name = pre_cat + cat
+            if all_req:
+                results.append({'path': level_name, 'req': sorted(all_req)})
+            self.level_explorer(group, level + 1, max_levels, level_name + ".", results)
+        return results
 
-    def add_levels(self, df):
-        # viene usata la funzione di mappatura dei requisti per cartelle
-        res = self.level_explorer(df, 0, self.number_of_levels, "", pd.DataFrame())
+    def add_levels(self, records):
+        # mappa i requirements a livello di cartella
+        results = self.level_explorer(records, 0, self.number_of_levels, "", [])
+        # aggiunge i path completi dei file (path + filename senza .py)
+        for r in records:
+            stem = r.file[:-3] if r.file.endswith('.py') else r.file
+            results.append({'path': f"{r.path}.{stem}", 'req': r.req})
+        results.sort(key=lambda x: x['path'])
+        return results
 
-        # al percorso di un file viene aggiunto anche il nome del file stesso
-        df.loc[:, 'path'] = df.loc[:, 'path'] + "." + df['file'].str.replace('.py', '', regex=True)
-        # tutti i requirements vengono messi in un unico dataframe
-        res = pd.concat([res, df.loc[:, ['path', 'req']]], ignore_index=True).sort_values(by=['path'])
-        return res
-
-    def write_mapping(self, df, **kwargs):
+    def write_mapping(self, records, **kwargs):
 
         # working_dir = parent della libreria (mode lib, dove c'e' setup.py) o la libreria stessa (mode script).
         # Tutte le scritture passano per questo path: niente piu os.chdir.
         wd = self.working_dir
 
         # vengono trovate tutte le librerie usate nel progetto
-        single_requirements = set([item for sublist in df['req'].tolist() for item in sublist])
+        single_requirements = set()
+        for r in records:
+            single_requirements.update(r.req)
 
         distribution_not_found, requirements_variable, requirements_versioned, variables_keys = self.clean_from_python_packages(single_requirements)
 
@@ -311,11 +271,10 @@ class LibMapperTools:
         docs_dir = wd / 'docs'
         mkdocs_yml = wd / 'mkdocs.yml'
         if docs_dir.exists() and mkdocs_yml.exists():
-            for i in range(df.shape[0]):
-                if df.loc[df.index[i], f'file'] != "__init__.py":
-                    name = df.loc[df.index[i], 'path_file']
-                    with open(docs_dir / f"{name}.md", "w", encoding='utf-8') as f:
-                        f.write(f"::: {name}")
+            for r in records:
+                if r.file != "__init__.py":
+                    with open(docs_dir / f"{r.path_file}.md", "w", encoding='utf-8') as f:
+                        f.write(f"::: {r.path_file}")
 
             with open(mkdocs_yml, "r", encoding='utf-8') as f:
                 contents_yml = f.readlines()
@@ -341,18 +300,19 @@ class LibMapperTools:
             #######################################################################################
             docs = []
             temp_to_add = None
-            for i in range(df.shape[0]):
-                if df.loc[df.index[i], f'file'] != "__init__.py":
-                    valid_col = df.loc[df.index[i], [f'level_{j}' for j in range(self.number_of_levels)]].notnull().sum() - 1
-                    chapter = df.loc[df.index[i], f'level_{valid_col}']
+            for r in records:
+                if r.file != "__init__.py":
+                    # indice della cartella che contiene il file: e' l'ultimo livello in r.levels
+                    valid_col = len(r.levels) - 1
+                    chapter = r.levels[valid_col]
                     row = f"    - {chapter}:"
-                    space = "  "*(valid_col + 1)
+                    space = "  " * (valid_col + 1)
                     is_to_add = space + row
                     if is_to_add != temp_to_add:
                         temp_to_add = is_to_add
                         docs.append(space + row)
-                    name = df.loc[df.index[i], 'file'].split(".py")[0]
-                    docs.append(space + f"      - {name}: {df.loc[df.index[i], 'path_file']}")
+                    name = r.file.split(".py")[0]
+                    docs.append(space + f"      - {name}: {r.path_file}")
 
             #######################################################################################
 
@@ -390,12 +350,14 @@ class LibMapperTools:
                 if not setup_path.exists():
                     raise ValueError(f'missing setup.py at {setup_path}, mandatory for mode lib')
 
-                df = self.cross_mapping(df)
-                df = self.add_levels(df)
+                records = self.cross_mapping(records)
+                # entries: list[dict] con keys 'path', 'req' (uno per cartella + uno per file)
+                entries = self.add_levels(records)
 
-                # il nome del percorso viene trasformato sostituendo i . con _ ma viene mantenuto anche il nome originale
-                df.loc[:, 'original'] = df.loc[:, 'path'].copy()
-                df.loc[:, 'path'] = df.loc[:, 'path'].str.replace(".", "_", regex=False)
+                # il nome del percorso viene tenuto come 'original' (con i punti) e usato come chiave
+                # del requires_dict in setup.py
+                for e in entries:
+                    e['original'] = e['path']
 
                 with open(setup_path, "r", encoding='utf-8') as f:
                     contents = f.readlines()
@@ -424,29 +386,22 @@ class LibMapperTools:
                     start = contents.index('# start')
                     stop = contents.index('# stop')
 
-                    packets = ['' for _ in range(df.shape[0])]
-                    for i in range(df.shape[0]):
-                        packets[i] += f"'{df.loc[df.index[i], 'original']}': ["
+                    packets = []
+                    for e in entries:
+                        line = f"'{e['original']}': ["
 
-                        _, _, _, eles = self.clean_from_python_packages(df.loc[df.index[i], "req"])
+                        _, _, _, eles = self.clean_from_python_packages(e['req'])
 
-                        j = 0
-                        for ele in eles:
-                            if ele != 'waste':
-                                if j == 0:
-                                    packets[i] += f'{ele}'
-                                else:
-                                    packets[i] += f', {ele}'
-                                j += 1
-                        packets[i] += '],'
+                        non_waste = [el for el in eles if el != 'waste']
+                        line += ', '.join(non_waste)
+                        line += '],'
+                        packets.append(line)
 
-                    packets = ['requires_dict = {'] + packets
-                    packets = packets + ['}']
+                    packets = ['requires_dict = {'] + packets + ['}']
 
-                    new_set_up = ['' for _ in range(start+len(contents)-stop+len(packets))]
-                    new_set_up[:start+1] = contents[:start+1]
-                    new_set_up[start+1:len(packets)+1] = packets
-                    new_set_up[start+1+len(packets):] = contents[stop:]
+                    new_set_up = list(contents[:start + 1])
+                    new_set_up += packets
+                    new_set_up += contents[stop:]
                 else:
                     print('missing version start/stop tag')
                     new_set_up = contents

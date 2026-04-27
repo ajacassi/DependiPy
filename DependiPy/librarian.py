@@ -63,16 +63,16 @@ def main():
                          remove=remove, replace_dict=replace_dict, exclusion=exclusion,
                          force_version=force_version, librerie_private=librerie_private, mode=mode)
 
-    requirements_pd = lmt.read_files()
+    records = lmt.read_files()
+    lmt.add_path(records)
 
-    requirements_pd = lmt.add_path(requirements_pd)
+    # estraggo le cross-reference e applico la pulizia ad ogni record
+    for r in records:
+        r.cross = lmt.cross_reference_extraction(r.req)
+    for r in records:
+        r.req = lmt.cleaning(r.req)
 
-    # applico la funzione che estrae le cross reference e la applico alla colonna delle librerie
-    requirements_pd.loc[:, 'cross'] = requirements_pd.loc[:, 'req'].apply(lmt.cross_reference_extraction)
-
-    requirements_pd.loc[:, 'req'] = requirements_pd.loc[:, 'req'].apply(lmt.cleaning)
-
-    lmt.write_mapping(requirements_pd, **kwargs)
+    lmt.write_mapping(records, **kwargs)
 
 
 if __name__ == '__main__':
