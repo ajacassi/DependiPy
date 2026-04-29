@@ -65,7 +65,7 @@ Il file config deve avere la seguente struttura:
 **Le librerie inserite nel requirements.txt sono sempre e solo quelle che devono essere installate, per cui non verranno mai riportate le dipendenze native di Python**
 
 ## lib/setup.py
-Se si sta lavorando in modalita lib, libraria produce un file alla fine della mappatura.
+Se si sta lavorando in modalita lib con un `setup.py` esistente, librarian scrive la mappatura direttamente al suo interno.
 Se il setup.py ha la forma seguente:
 ```python
 from setuptools import find_packages, setup
@@ -118,6 +118,57 @@ setup(
 ```
 Sono necessarie le seguenti chiavi nel setup.py: **# start**, uno **# stop**, uno **# version go** e uno **# version end**.
 Librarian andra a scrivere la mappatura direttamente nel setup.py.
+
+## lib/pyproject.toml
+DependiPy supporta anche lo standard moderno **PEP 621** tramite `pyproject.toml`.
+
+### auto-detection
+Il comportamento viene rilevato automaticamente:
+- se esiste `setup.py` → viene usato (comportamento invariato)
+- se esiste `pyproject.toml` (senza `setup.py`) → viene aggiornato
+- se non esiste nessuno dei due e si passa `-m lib` → viene **generato** un `pyproject.toml` minimo e poi popolato
+
+### cosa viene scritto
+La mappatura delle dipendenze viene scritta in due sezioni standard PEP 621:
+
+```toml
+[project]
+dependencies = [
+    "lxml==5.4.0",
+    "tqdm==4.64.1",
+]
+
+[project.optional-dependencies]
+"utilities" = ["lxml==5.4.0", "tqdm==4.64.1"]
+"utilities.io" = ["lxml==5.4.0"]
+"utilities.io.parser" = ["lxml==5.4.0"]
+```
+
+- `[project.dependencies]` contiene le dipendenze flat di tutta la libreria (equivalente a `install_requires`)
+- `[project.optional-dependencies]` contiene la segmentazione per cartella e per file (equivalente a `extras_require`), con le stesse chiavi dotted-path usate in `setup.py`
+
+Il resto del file (nome, versione, autore, build-system, ecc.) viene **preservato intatto** ad ogni riesecuzione.
+
+### generazione da zero
+Se il `pyproject.toml` non esiste e si passa `-m lib`, DependiPy lo genera con questo skeleton minimo:
+
+```toml
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "<nome_libreria>"
+version = "<versione da version.py, o 0.1.0>"
+description = ""
+dependencies = []
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["<nome_libreria>*"]
+```
+
+La versione viene letta automaticamente da `version.py` se presente nella cartella della libreria.
 
 ## script/k8s_config.json
 Se si sta lavorando in modalita script, librarian cerchera tutte le dipendenze con le libreria custom indicate nel codice.
@@ -190,6 +241,8 @@ E' possibile concatenare piu moduli se si sta usando piu parti della libreria ma
 ```bash
 pip install -e ./utilities[utilities.args.parser,utilities.io.analytics_job_util]
 ```
+
+La stessa sintassi funziona identicamente sia con `setup.py` che con `pyproject.toml`: le chiavi degli extra sono le stesse in entrambi i casi.
 
 # Documentation
 
