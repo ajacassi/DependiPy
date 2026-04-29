@@ -52,16 +52,16 @@ def main():
         raise NotADirectoryError(f"path '{lib_root}' is not a directory")
     lib_name = lib_root.name
 
-    # parent della libreria: e' qui che sta setup.py in mode lib, ed e' qui che si scrive
-    # requirements.txt / si aggiorna setup.py
+    # parent della libreria: e' qui che sta setup.py o pyproject.toml in mode lib
     setup_candidate = lib_root.parent / 'setup.py'
+    toml_candidate = lib_root.parent / 'pyproject.toml'
 
-    # se trovo il file setup.py e non ho un mode dagli argomenti passati allora imposto mode come lib
-    detected_mode = 'lib' if setup_candidate.exists() else 'script'
+    # mode lib se esiste setup.py oppure pyproject.toml (setup.py ha precedenza)
+    detected_mode = 'lib' if (setup_candidate.exists() or toml_candidate.exists()) else 'script'
     mode = kwargs['mode'] if kwargs['mode'] is not None else detected_mode
     print(f'selected mode: {mode}')
 
-    # in mode lib si scrive nel parent (dove c'e' setup.py); in mode script si lavora dentro la cartella stessa
+    # in mode lib si scrive nel parent (dove c'e' setup.py o pyproject.toml); in mode script si lavora dentro la cartella stessa
     working_dir = lib_root.parent if mode == 'lib' else lib_root
 
     lmt = LibMapperTools(lib_name=lib_name, lib_root=lib_root, working_dir=working_dir,

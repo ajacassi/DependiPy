@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from importlib import metadata
 from pathlib import Path
 from tqdm import tqdm
+import tomlkit
 
 
 # match del nome di un pacchetto all'inizio di una stringa Requires-Dist.
@@ -389,76 +390,169 @@ class LibMapperTools:
 
             if self.mode == 'lib':
                 setup_path = wd / 'setup.py'
-                if not setup_path.exists():
-                    raise ValueError(f'missing setup.py at {setup_path}, mandatory for mode lib')
+                toml_path = wd / 'pyproject.toml'
 
-                records = self.cross_mapping(records)
-                # entries: list[dict] con keys 'path', 'req' (uno per cartella + uno per file)
-                entries = self.add_levels(records)
+                if setup_path.exists():
+                    records = self.cross_mapping(records)
+                    # entries: list[dict] con keys 'path', 'req' (uno per cartella + uno per file)
+                    entries = self.add_levels(records)
 
-                # il nome del percorso viene tenuto come 'original' (con i punti) e usato come chiave
-                # del requires_dict in setup.py
-                for e in entries:
-                    e['original'] = e['path']
-
-                with open(setup_path, "r", encoding='utf-8') as f:
-                    contents = f.readlines()
-
-                for i in range(len(contents)):
-                    contents[i] = contents[i].split('\n')[0]
-
-                # controllare se ci sono gli star e end
-                # se sono presenti i marker per riscrivere le librerie vengono usati
-                if '# version go' in contents and '# version end' in contents:
-                    vers_start = contents.index('# version go') + 1
-                    vers_stop = contents.index('# version end')
-                else:
-                    raise ValueError(
-                        f"missing '# version go' / '# version end' markers in {setup_path}"
-                    )
-
-                # vengono eliminate le librerie dentro i marker
-                del contents[vers_start: vers_stop]
-
-                # venogono aggiunte le nuove librerie alla lista da scrivere sul file
-                contents[vers_start:vers_start] = requirements_variable
-
-                missing = False
-                if '# start' in contents and '# stop' in contents:
-                    start = contents.index('# start')
-                    stop = contents.index('# stop')
-
-                    packets = []
+                    # il nome del percorso viene tenuto come 'original' (con i punti) e usato come chiave
+                    # del requires_dict in setup.py
                     for e in entries:
-                        line = f"'{e['original']}': ["
+                        e['original'] = e['path']
 
-                        _, _, _, eles = self.clean_from_python_packages(e['req'])
+                    with open(setup_path, "r", encoding='utf-8') as f:
+                        contents = f.readlines()
 
-                        non_waste = [el for el in eles if el != 'waste']
-                        line += ', '.join(non_waste)
-                        line += '],'
-                        packets.append(line)
+                    for i in range(len(contents)):
+                        contents[i] = contents[i].split('\n')[0]
 
-                    packets = ['requires_dict = {'] + packets + ['}']
+                    # controllare se ci sono gli star e end
+                    # se sono presenti i marker per riscrivere le librerie vengono usati
+                    if '# version go' in contents and '# version end' in contents:
+                        vers_start = contents.index('# version go') + 1
+                        vers_stop = contents.index('# version end')
+                    else:
+                        raise ValueError(
+                            f"missing '# version go' / '# version end' markers in {setup_path}"
+                        )
 
-                    new_set_up = list(contents[:start + 1])
-                    new_set_up += packets
-                    new_set_up += contents[stop:]
+                    # vengono eliminate le librerie dentro i marker
+                    del contents[vers_start: vers_stop]
+
+                    # venogono aggiunte le nuove librerie alla lista da scrivere sul file
+                    contents[vers_start:vers_start] = requirements_variable
+
+                    missing = False
+                    if '# start' in contents and '# stop' in contents:
+                        start = contents.index('# start')
+                        stop = contents.index('# stop')
+
+                        packets = []
+                        for e in entries:
+                            line = f"'{e['original']}': ["
+
+                            _, _, _, eles = self.clean_from_python_packages(e['req'])
+
+                            non_waste = [el for el in eles if el != 'waste']
+                            line += ', '.join(non_waste)
+                            line += '],'
+                            packets.append(line)
+
+                        packets = ['requires_dict = {'] + packets + ['}']
+
+                        new_set_up = list(contents[:start + 1])
+                        new_set_up += packets
+                        new_set_up += contents[stop:]
+                    else:
+                        print('missing version start/stop tag')
+                        new_set_up = contents
+                        missing = True
+
+                    if missing:
+                        for i, line in enumerate(new_set_up):
+                            if 'install_requires' in line:
+                                new_set_up[i] = f'install_requires={str(variables_keys)},'.replace("'", "")
+
+                    with open(setup_path, "w", encoding='utf-8') as f:
+                        for s in new_set_up:
+                            f.write(str(s) + "\n")
+
+                    print(str(setup_path))
+
                 else:
-                    print('missing version start/stop tag')
-                    new_set_up = contents
-                    missing = True
+                    # pyproject.toml (esistente o da generare)
+                    if not toml_path.exists():
+                        self._generate_pyproject_toml(toml_path)
+                    records = self.cross_mapping(records)
+                    entries = self.add_levels(records)
+                    self._write_toml_mapping(toml_path, entries, requirements_versioned)
+                    print(str(toml_path))
 
-                if missing:
-                    for i, line in enumerate(new_set_up):
-                        if 'install_requires' in line:
-                            new_set_up[i] = f'install_requires={str(variables_keys)},'.replace("'", "")
+    def _detect_version(self):
+        """Cerca version.py dentro lib_root e restituisce la stringa di versione trovata."""
+        version_file = self.lib_root / 'version.py'
+        if version_file.exists():
+            try:
+                with open(version_file, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        m = re.search(r"['\"](\d+\.\d+[\.\d]*)['\"]", line)
+                        if m:
+                            return m.group(1)
+            except OSError:
+                pass
+        return '0.1.0'
 
-                with open(setup_path, "w", encoding='utf-8') as f:
-                    for s in new_set_up:
-                        f.write(str(s) + "\n")
+    def _generate_pyproject_toml(self, toml_path):
+        """Crea un pyproject.toml minimo PEP 621 se non ne esiste uno."""
+        version = self._detect_version()
 
-                print(str(setup_path))
+        doc = tomlkit.document()
+
+        build_system = tomlkit.table()
+        build_system.add('requires', ['setuptools>=61', 'wheel'])
+        build_system.add('build-backend', 'setuptools.backends.legacy:build')
+        doc.add('build-system', build_system)
+        doc.add(tomlkit.nl())
+
+        project = tomlkit.table()
+        project.add('name', self.lib_name)
+        project.add('version', version)
+        project.add('description', '')
+        project.add('dependencies', tomlkit.array())
+        doc.add('project', project)
+        doc.add(tomlkit.nl())
+
+        find_table = tomlkit.table(is_super_table=True)
+        packages_find = tomlkit.table()
+        packages_find.add('where', ['.'])
+        packages_find.add('include', [f'{self.lib_name}*'])
+        find_table.add('packages', tomlkit.table(is_super_table=True))
+        find_table['packages'].add('find', packages_find)
+        tool = tomlkit.table(is_super_table=True)
+        tool.add('setuptools', find_table)
+        doc.add('tool', tool)
+
+        with open(toml_path, 'w', encoding='utf-8') as f:
+            f.write(tomlkit.dumps(doc))
+        print(f'Generated {toml_path}')
+
+    def _write_toml_mapping(self, toml_path, entries, requirements_versioned):
+        """Aggiorna [project.dependencies] e [project.optional-dependencies] in pyproject.toml."""
+        with open(toml_path, 'r', encoding='utf-8') as f:
+            doc = tomlkit.load(f)
+
+        if 'project' not in doc:
+            doc.add('project', tomlkit.table())
+
+        # [project.dependencies] — lista flat, equivalente a install_requires
+        dep_array = tomlkit.array()
+        dep_array.multiline(True)
+        for d in sorted(requirements_versioned):
+            dep_array.append(d)
+        doc['project']['dependencies'] = dep_array
+
+        # [project.optional-dependencies] — dipendenze segmentate per cartella/file
+        # PEP 508: il nome di un extra deve iniziare e finire con [A-Za-z0-9].
+        # __init__ termina con '_' (es. mylib.__init__) e non è un extra installabile utile: va saltato.
+        opt_table = tomlkit.table()
+        for e in entries:
+            if e['path'].split('.')[-1] == '__init__':
+                continue
+            _, _, versioned, _ = self.clean_from_python_packages(e['req'])
+            if not versioned:
+                continue
+            arr = tomlkit.array()
+            arr.multiline(True)
+            for v in sorted(versioned):
+                arr.append(v)
+            # tomlkit gestisce automaticamente le quoted keys con i punti
+            opt_table.add(tomlkit.items.SingleKey(e['path']), arr)
+        doc['project']['optional-dependencies'] = opt_table
+
+        with open(toml_path, 'w', encoding='utf-8') as f:
+            f.write(tomlkit.dumps(doc))
 
     def clean_from_python_packages(self, single_requirements):
         # nomi dei moduli della stdlib: filtrati senza warning perche non vanno nei requirements.

@@ -17,6 +17,7 @@ version = version[0].split("'")[1]
 # version go
 argparse = 'argparse==1.4.0'
 tqdm = 'tqdm==4.64.1'
+tomlkit = 'tomlkit>=0.11.0'
 # version end
 
 setup(
@@ -30,6 +31,6 @@ setup(
     author_email='',
     description='',
     url="https://github.com/ajacassi/DependiPy.git",
-    install_requires=[argparse, tqdm],
+    install_requires=[argparse, tqdm, tomlkit],
     entry_points={"console_scripts": ["DependiPy= DependiPy.librarian:main [path]"]}
 )
